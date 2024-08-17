@@ -1,0 +1,10 @@
+[package]
+name = "streamer-wands-linux"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0"
+lazy-regex = "3.2"
+steamlocate = "1.2"
+tungstenite = { version = "0.23", features = ["native-tls"] }
