@@ -1,0 +1,4 @@
+<Mod
+  name="Streamer Wands Linux Fix"
+  description="Because the pollnet library explodes under Proton! :)"
+  request_no_api_restrictions="1" />
