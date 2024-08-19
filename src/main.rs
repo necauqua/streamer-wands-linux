@@ -65,7 +65,7 @@ fn poll_file(file: PathBuf) -> Result<Receiver<String>> {
     Ok(messages_rx)
 }
 
-fn send_loop(ws_url: &str, msg_rx: &Receiver<String>) -> Result<&'static str> {
+fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Result<&'static str> {
     let (socket, response) = tungstenite::connect(ws_url)?;
 
     let s = response.status();
@@ -101,8 +101,8 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>) -> Result<&'static str> {
             .lock()
             .map_err(|_| anyhow!("socket was poisoned"))?
             .send(Message::Text(msg_rx.recv().unwrap()))?;
-        msg_rx.recv().unwrap();
         counter += 1;
+        *retries = 0;
 
         eprintln!("\x1b[Fsent messages: {counter}");
     }
@@ -123,7 +123,7 @@ fn main() -> Result<()> {
 
     let mut retries = 0;
     loop {
-        match send_loop(&ws_url, &msg_rx) {
+        match send_loop(&ws_url, &msg_rx, &mut retries) {
             Err(e) => {
                 if retries < 10 {
                     eprintln!("failed: {e}, retrying in 5 seconds");
