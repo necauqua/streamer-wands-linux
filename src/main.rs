@@ -9,6 +9,10 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::Parser;
 use include_dir::include_dir;
 use lazy_regex::lazy_regex;
+use notify::{
+    event::{AccessKind, AccessMode},
+    Event, EventKind, INotifyWatcher, RecursiveMode, Watcher,
+};
 use steamlocate::SteamDir;
 use tungstenite::Message;
 
@@ -30,7 +34,7 @@ fn snoop_ws_url(
                 .context("Malformed host.lua, either streamer wands is corrupted or new/outdated")?
                 .extract();
 
-            if host.ends_with("/") {
+            if host.ends_with('/') {
                 host.to_owned()
             } else {
                 format!("{host}/")
@@ -70,22 +74,26 @@ fn install_patch_mod(noita_dir: &Path) -> Result<()> {
     Ok(())
 }
 
-fn poll_file(file: PathBuf) -> Result<Receiver<String>> {
+fn poll_file(file: &Path) -> Result<(Receiver<String>, INotifyWatcher)> {
     let (messages_tx, messages_rx) = std::sync::mpsc::channel();
 
-    let mut last = String::new();
-    thread::spawn(move || loop {
-        let Ok(data) = std::fs::read_to_string(&file) else {
-            break;
-        };
-        if data != last {
-            messages_tx.send(data.clone()).unwrap();
+    let mut watcher = notify::recommended_watcher({
+        let file = file.to_owned();
+        move |e: notify::Result<Event>| {
+            let Ok(e) = e else {
+                return;
+            };
+            let EventKind::Access(AccessKind::Close(AccessMode::Write)) = e.kind else {
+                return;
+            };
+            if let Ok(data) = std::fs::read_to_string(&file) {
+                messages_tx.send(data.clone()).unwrap();
+            }
         }
-        last = data;
-        sleep(Duration::from_secs(1));
-    });
+    })?;
+    watcher.watch(file, RecursiveMode::NonRecursive)?;
 
-    Ok(messages_rx)
+    Ok((messages_rx, watcher))
 }
 
 fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Result<&'static str> {
@@ -95,9 +103,8 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Resu
     if !s.is_success() && !s.is_informational() {
         if s.is_client_error() {
             return Ok("{s} response from the server, bad token? Try to re-auth");
-        } else {
-            bail!("{s} response from the server, is it down?.");
         }
+        bail!("{s} response from the server, is it down?.");
     }
 
     // bruh I cant be bothered to setup better concurrency
@@ -182,7 +189,7 @@ fn main() -> Result<()> {
         install_patch_mod(&noita_dir)?;
     }
 
-    let msg_rx = poll_file(noita_dir.join("streamer-wands.json"))?;
+    let (msg_rx, _watcher) = poll_file(&noita_dir.join("streamer-wands.json"))?;
 
     if args.dry_run {
         loop {
