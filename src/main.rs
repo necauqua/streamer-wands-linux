@@ -5,7 +5,7 @@ use std::{
     time::Duration,
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use include_dir::include_dir;
 use lazy_regex::lazy_regex;
 use steamlocate::SteamDir;
@@ -99,7 +99,7 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>) -> Result<&'static str> {
     loop {
         socket
             .lock()
-            .unwrap()
+            .map_err(|_| anyhow!("socket was poisoned"))?
             .send(Message::Text(msg_rx.recv().unwrap()))?;
         msg_rx.recv().unwrap();
         counter += 1;
