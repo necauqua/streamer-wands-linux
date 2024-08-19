@@ -5,6 +5,7 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0"
+clap = { version = "4.5.16", features = ["derive"] }
 include_dir = "0.7"
 lazy-regex = "3.2"
 steamlocate = "1.2"

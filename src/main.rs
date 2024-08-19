@@ -6,31 +6,54 @@ use std::{
 };
 
 use anyhow::{anyhow, bail, Context, Result};
+use clap::Parser;
 use include_dir::include_dir;
 use lazy_regex::lazy_regex;
 use steamlocate::SteamDir;
 use tungstenite::Message;
 
-fn snoop_ws_url(noita_dir: &Path) -> Result<String> {
-    let host_path = noita_dir.join("mods/streamer_wands/files/ws/host.lua");
+fn snoop_ws_url(
+    noita_dir: &Path,
+    host_override: Option<String>,
+    token_override: Option<String>,
+) -> Result<String> {
+    let host = match host_override {
+        Some(host) => host,
+        _ => {
+            let host_path = noita_dir.join("mods/streamer_wands/files/ws/host.lua");
 
-    let host = std::fs::read_to_string(host_path)
-        .context("Failed to read streamer wands host, is the mod installed?")?;
+            let host = std::fs::read_to_string(host_path)
+                .context("Failed to read streamer wands host, is the mod installed?")?;
 
-    let (_, [host]) = lazy_regex!("HOST_URL = \"(.*?)\"")
-        .captures(&host)
-        .context("Malformed host.lua, either streamer wands is corrupted or new/outdated")?
-        .extract();
+            let (_, [host]) = lazy_regex!("HOST_URL = \"(.*?)\"")
+                .captures(&host)
+                .context("Malformed host.lua, either streamer wands is corrupted or new/outdated")?
+                .extract();
 
-    let token_path = noita_dir.join("mods/streamer_wands/token.lua");
+            if host.ends_with("/") {
+                host.to_owned()
+            } else {
+                format!("{host}/")
+            }
+        }
+    };
 
-    let token = std::fs::read_to_string(token_path)
-        .context("Failed to read streamer wands token, is the mod installed?")?;
+    let token = match token_override {
+        Some(token) => token,
+        _ => {
+            let token_path = noita_dir.join("mods/streamer_wands/token.lua");
 
-    let (_, [token]) = lazy_regex!("return \"(.*?)\"")
-        .captures(&token)
-        .context("Malformed token.lua, either streamer wands is corrupted or new/outdated")?
-        .extract();
+            let token = std::fs::read_to_string(token_path)
+                .context("Failed to read streamer wands token, is the mod installed?")?;
+
+            let (_, [token]) = lazy_regex!("return \"(.*?)\"")
+                .captures(&token)
+                .context("Malformed token.lua, either streamer wands is corrupted or new/outdated")?
+                .extract();
+
+            token.to_owned()
+        }
+    };
 
     Ok(format!("{host}{token}"))
 }
@@ -108,18 +131,64 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Resu
     }
 }
 
+/// A hacky workaround for the streamer wands mod not being able to connect to
+/// the onlywands websocket server to send data on Linux, due to the
+/// pollnet.dll library not working under Proton.
+///
+/// It installs a tiny Noita mod that patches the streamer wands mod to write
+/// the data to a file, and then looks for changes in that file and sends them
+/// to the onlywands websocket outside of the win32 game running through wine.
+#[derive(clap::Parser)]
+struct Args {
+    /// Do not connect to the onlywands websocket and print the messages to
+    /// stdout instead
+    #[arg(short, long)]
+    dry_run: bool,
+    /// Do not install the patch mod in the noita mods folder
+    #[arg(short = 'D', long)]
+    dont_patch: bool,
+    /// Override the websocket host. By default it's scraped from the streamer
+    /// wands installation (so either `wss://onlywands.com` or
+    /// `wss://dev.onlywands.com`)
+    #[arg(short = 'H', long)]
+    host: Option<String>,
+    /// Override the JWT used to authenticate to the websocket. By default it's
+    /// scraped from the streamer wands installation
+    #[arg(short = 'T', long)]
+    token: Option<String>,
+    /// Override the noita installation dir - usually the steam folder is
+    /// automatically discovered.
+    #[arg()]
+    noita_dir: Option<PathBuf>,
+}
+
 fn main() -> Result<()> {
-    let mut steam = SteamDir::locate().context("Steam not found")?;
-    let noita_dir = steam.app(&881100).context("Noita not found")?;
-    let noita_dir = &noita_dir.path;
+    let args = Args::parse();
 
-    let ws_url = snoop_ws_url(noita_dir)?;
+    let noita_dir = match args.noita_dir {
+        Some(dir) => dir,
+        _ => {
+            let mut steam = SteamDir::locate().context("Steam not found")?;
+            let noita_dir = steam.app(&881100).context("Noita not found")?;
+            noita_dir.path.clone()
+        }
+    };
 
-    // install after snooping cuz now we're sure something
-    // looking an awful lot like streamer wands is installed
-    install_patch_mod(noita_dir)?;
+    let ws_url = snoop_ws_url(&noita_dir, args.host, args.token)?;
+
+    if !args.dont_patch {
+        // install after snooping cuz now we're sure something
+        // looking an awful lot like streamer wands is installed
+        install_patch_mod(&noita_dir)?;
+    }
 
     let msg_rx = poll_file(noita_dir.join("streamer-wands.json"))?;
+
+    if args.dry_run {
+        loop {
+            println!("{}", msg_rx.recv()?);
+        }
+    }
 
     let mut retries = 0;
     loop {
