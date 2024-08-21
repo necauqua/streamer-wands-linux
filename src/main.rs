@@ -1,11 +1,12 @@
 use std::{
+    io::{Read, Write},
     path::{Path, PathBuf},
-    sync::{mpsc::Receiver, Arc, Mutex},
-    thread::{self, sleep},
-    time::Duration,
+    sync::mpsc::{Receiver, RecvTimeoutError},
+    thread::sleep,
+    time::{Duration, Instant},
 };
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::Parser;
 use include_dir::include_dir;
 use lazy_regex::lazy_regex;
@@ -14,7 +15,7 @@ use notify::{
     Event, EventKind, INotifyWatcher, RecursiveMode, Watcher,
 };
 use steamlocate::SteamDir;
-use tungstenite::Message;
+use tungstenite::{Message, WebSocket};
 
 fn snoop_ws_url(
     noita_dir: &Path,
@@ -96,8 +97,62 @@ fn poll_file(file: &Path) -> Result<(Receiver<String>, INotifyWatcher)> {
     Ok((messages_rx, watcher))
 }
 
+struct Pinger {
+    last_ping: Instant,
+    ping_interval: Duration,
+    ping_message: Message,
+}
+
+impl Pinger {
+    fn new(ping_interval: Duration, ping_message: Message) -> Self {
+        Self {
+            last_ping: Instant::now(),
+            ping_interval,
+            ping_message,
+        }
+    }
+
+    fn ping<S: Read + Write>(&mut self, socket: &mut WebSocket<S>) -> Result<()> {
+        socket.send(self.ping_message.clone())?;
+        self.last_ping = Instant::now();
+        Ok(())
+    }
+
+    fn maybe_ping<S: Read + Write>(&mut self, socket: &mut WebSocket<S>) -> Result<bool> {
+        if self.last_ping.elapsed() > self.ping_interval {
+            self.ping(socket)?;
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+}
+
+struct Counter {
+    prefix: String,
+    count: u64,
+}
+
+impl Counter {
+    fn new(prefix: impl ToString) -> Self {
+        Self {
+            prefix: prefix.to_string(),
+            count: 0,
+        }
+    }
+
+    fn redraw(&self) {
+        eprintln!("\x1b[F{}{}", self.prefix, self.count);
+    }
+
+    fn tick(&mut self) {
+        self.count += 1;
+        self.redraw();
+    }
+}
+
 fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Result<&'static str> {
-    let (socket, response) = tungstenite::connect(ws_url)?;
+    let (mut socket, response) = tungstenite::connect(ws_url)?;
 
     let s = response.status();
     if !s.is_success() && !s.is_informational() {
@@ -107,34 +162,25 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Resu
         bail!("{s} response from the server, is it down?.");
     }
 
-    // bruh I cant be bothered to setup better concurrency
-    let socket = Arc::new(Mutex::new(socket));
+    let mut counter = Counter::new("sent messages: ");
+    eprintln!();
+    counter.redraw();
 
-    thread::spawn({
-        let socket = socket.clone();
-        move || {
-            loop {
-                sleep(Duration::from_secs(5)); // literally what the streamer wands mod does, idk
-                socket
-                    .lock()
-                    .unwrap()
-                    .send(Message::Text("im alive".to_owned()))
-                    .unwrap();
+    let mut pinger = Pinger::new(Duration::from_secs(5), Message::Text("im alive".into()));
+
+    loop {
+        match msg_rx.recv_timeout(pinger.ping_interval) {
+            Ok(msg) => {
+                pinger.maybe_ping(&mut socket)?;
+                socket.send(Message::Text(msg))?;
+                counter.tick();
+                *retries = 0;
+            }
+            Err(RecvTimeoutError::Timeout) => pinger.ping(&mut socket)?,
+            Err(RecvTimeoutError::Disconnected) => {
+                break Ok("inotify channel disconnected");
             }
         }
-    });
-
-    let mut counter = 0;
-    eprintln!("sent messages: {counter}");
-    loop {
-        socket
-            .lock()
-            .map_err(|_| anyhow!("socket was poisoned"))?
-            .send(Message::Text(msg_rx.recv().unwrap()))?;
-        counter += 1;
-        *retries = 0;
-
-        eprintln!("\x1b[Fsent messages: {counter}");
     }
 }
 
