@@ -10,6 +10,9 @@ local function send(data)
     end
 end
 
+-- everything except _ws_main is local, so we do the upvalue dance
+-- to get the socket and then we monkeypatch it to do our thing
+
 local idx = 1
 while true do
     ---@diagnostic disable-next-line: undefined-global
@@ -21,6 +24,9 @@ while true do
         value.status = function() return "open" end
         value.send = function(_, data) send(data) end
         value.poll = function() return true end
+
+        -- nobody in the noita wiki examples calls break when
+        -- linearly searching for something, wtf is up with that lol
         break
     end
     idx = idx + 1
