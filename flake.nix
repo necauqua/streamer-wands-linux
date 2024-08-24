@@ -34,12 +34,19 @@
             pkgs.lib.all (re: builtins.match re relPath == null) regexes;
         };
 
-      rust-version = pkgs.rust-bin.stable."1.80.0".default;
+      rust-version = pkgs.rust-bin.stable.latest.default;
 
       rust-platform = pkgs.makeRustPlatform {
         rustc = rust-version;
         cargo = rust-version;
       };
+
+      systemDeps = with pkgs; [
+        openssl
+      ];
+      darwinDeps = with pkgs; lib.optionals stdenv.isDarwin [ ];
+
+      buildDeps = with pkgs; lib.optionals (systemDeps != [ ]) [ pkg-config ];
     in
     {
       packages = {
@@ -56,13 +63,24 @@
           cargoLock.lockFile = ./Cargo.lock;
           useNextest = true;
 
-          nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ pkgs.openssl ];
+          nativeBuildInputs = buildDeps;
+          buildInputs = systemDeps ++ darwinDeps;
 
           # makes no sense in a nix package
           CARGO_INCREMENTAL = "0";
 
           preCheck = "export RUST_BACKTRACE=1";
+
+          # for clap apps
+          # postInstall = ''
+          #   $out/bin/streamer-wands-linux util mangen > ./streamer-wands-linux.1
+          #   installManPage ./streamer-wands-linux.1
+          #
+          #   installShellCompletion --cmd streamer-wands-linux \
+          #     --bash <($out/bin/streamer-wands-linux util completion --bash) \
+          #     --fish <($out/bin/streamer-wands-linux util completion --fish) \
+          #     --zsh  <($out/bin/streamer-wands-linux util completion --zsh)
+          # '';
         };
         default = self.packages.${system}.streamer-wands-linux;
       };
@@ -75,16 +93,13 @@
         buildInputs = with pkgs; [
           rust-version
 
-          openssl
-          pkg-config
-
           # Make sure rust-analyzer is present
           rust-analyzer
 
           cargo-nextest
           # cargo-insta
           # cargo-deny
-        ];
+        ] ++ buildDeps ++ systemDeps ++ darwinDeps;
 
         shellHook = ''
           export RUST_BACKTRACE=1
