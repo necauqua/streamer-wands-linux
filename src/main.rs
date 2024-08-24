@@ -218,6 +218,11 @@ struct Args {
 fn main() -> Result<()> {
     let args = Args::parse();
 
+    // TLS without system dependency on openssl
+    rustls::crypto::ring::default_provider()
+        .install_default()
+        .unwrap();
+
     let noita_dir = match args.noita_dir {
         Some(dir) => dir,
         _ => {

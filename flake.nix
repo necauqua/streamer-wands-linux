@@ -41,9 +41,7 @@
         cargo = rust-version;
       };
 
-      systemDeps = with pkgs; [
-        openssl
-      ];
+      systemDeps = [ ];
       darwinDeps = with pkgs; lib.optionals stdenv.isDarwin [ ];
 
       buildDeps = with pkgs; lib.optionals (systemDeps != [ ]) [ pkg-config ];
