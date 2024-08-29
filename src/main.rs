@@ -7,7 +7,9 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
-use clap::Parser;
+use clap::{CommandFactory as _, Parser};
+use clap_complete::{Generator, Shell};
+use clap_complete_nushell::Nushell;
 use include_dir::include_dir;
 use lazy_regex::lazy_regex;
 use notify::{
@@ -184,6 +186,15 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Resu
     }
 }
 
+#[derive(clap::ValueEnum, Clone, Debug)]
+enum GenerateThing {
+    Bash,
+    Zsh,
+    Fish,
+    Elvish,
+    Nushell,
+}
+
 /// A hacky workaround for the streamer wands mod not being able to connect to
 /// the onlywands websocket server to send data on Linux, due to the
 /// pollnet.dll library not working under Proton.
@@ -191,7 +202,7 @@ fn send_loop(ws_url: &str, msg_rx: &Receiver<String>, retries: &mut u32) -> Resu
 /// It installs a tiny Noita mod that patches the streamer wands mod to write
 /// the data to a file, and then looks for changes in that file and sends them
 /// to the onlywands websocket outside of the win32 game running through wine.
-#[derive(clap::Parser)]
+#[derive(clap::Parser, Debug)]
 struct Args {
     /// Do not connect to the onlywands websocket and print the messages to
     /// stdout instead
@@ -213,10 +224,35 @@ struct Args {
     /// automatically discovered.
     #[arg()]
     noita_dir: Option<PathBuf>,
+    /// Generates shell completions for the CLI, conflicts with all other flags
+    #[arg(long, exclusive = true, hide = true)]
+    completion: Option<GenerateThing>,
+    /// Generates the man page for the CLI, conflicts with all other flags
+    #[arg(long, exclusive = true, hide = true)]
+    man: bool,
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+
+    if args.man {
+        clap_mangen::Man::new(Args::command()).render(&mut std::io::stdout().lock())?;
+        return Ok(());
+    }
+    if let Some(completion) = args.completion {
+        use GenerateThing as T;
+        let generator: &dyn Generator = match completion {
+            T::Nushell => &Nushell,
+            T::Bash => &Shell::Bash,
+            T::Zsh => &Shell::Zsh,
+            T::Fish => &Shell::Fish,
+            T::Elvish => &Shell::Elvish,
+        };
+        let mut cmd = Args::command().bin_name(env!("CARGO_PKG_NAME"));
+        cmd.build();
+        generator.generate(&cmd, &mut std::io::stdout().lock());
+        return Ok(());
+    }
 
     // TLS without system dependency on openssl
     rustls::crypto::ring::default_provider()

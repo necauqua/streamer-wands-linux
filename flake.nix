@@ -61,7 +61,7 @@
           cargoLock.lockFile = ./Cargo.lock;
           useNextest = true;
 
-          nativeBuildInputs = buildDeps;
+          nativeBuildInputs = buildDeps ++ [ pkgs.installShellFiles ];
           buildInputs = systemDeps ++ darwinDeps;
 
           # makes no sense in a nix package
@@ -69,16 +69,15 @@
 
           preCheck = "export RUST_BACKTRACE=1";
 
-          # for clap apps
-          # postInstall = ''
-          #   $out/bin/streamer-wands-linux util mangen > ./streamer-wands-linux.1
-          #   installManPage ./streamer-wands-linux.1
-          #
-          #   installShellCompletion --cmd streamer-wands-linux \
-          #     --bash <($out/bin/streamer-wands-linux util completion --bash) \
-          #     --fish <($out/bin/streamer-wands-linux util completion --fish) \
-          #     --zsh  <($out/bin/streamer-wands-linux util completion --zsh)
-          # '';
+          postInstall = ''
+            $out/bin/streamer-wands-linux --man > ./streamer-wands-linux.1
+            installManPage ./streamer-wands-linux.1
+
+            installShellCompletion --cmd streamer-wands-linux \
+              --bash <($out/bin/streamer-wands-linux --completion bash) \
+              --fish <($out/bin/streamer-wands-linux --completion fish) \
+              --zsh  <($out/bin/streamer-wands-linux --completion zsh)
+          '';
         };
         default = self.packages.${system}.streamer-wands-linux;
       };

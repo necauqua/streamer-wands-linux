@@ -7,6 +7,9 @@ license = "MIT"
 [dependencies]
 anyhow = "1"
 clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+clap_complete_nushell = "4"
+clap_mangen = "0.2"
 include_dir = "0.7"
 lazy-regex = "3"
 notify = "6"
