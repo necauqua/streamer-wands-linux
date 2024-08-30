@@ -6,7 +6,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use clap::{CommandFactory as _, Parser};
 use clap_complete::{Generator, Shell};
 use clap_complete_nushell::Nushell;
@@ -90,7 +90,10 @@ fn poll_file(file: &Path) -> Result<(Receiver<String>, INotifyWatcher)> {
                 return;
             };
             if let Ok(data) = std::fs::read_to_string(&file) {
-                messages_tx.send(data.clone()).unwrap();
+                // disconnection error may happen here in a rare race
+                // right at the moment we close both the receiver and the
+                // watcher, we just ignore it then
+                _ = messages_tx.send(data);
             }
         }
     })?;
@@ -257,7 +260,7 @@ fn main() -> Result<()> {
     // TLS without system dependency on openssl
     rustls::crypto::ring::default_provider()
         .install_default()
-        .unwrap();
+        .map_err(|_| anyhow!("Failed to install crypto provider"))?;
 
     let noita_dir = match args.noita_dir {
         Some(dir) => dir,
